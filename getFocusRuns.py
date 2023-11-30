@@ -58,4 +58,5 @@ if __name__ == "__main__":
 			else: focusData.addEntry(nightDate, fields, TargColumn = False)
 	
 	# focusData.filterCamera("FPI")
+	focusData.sortByRunID()
 	focusData.writeToJSON("allfocus.json")

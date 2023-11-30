@@ -56,11 +56,20 @@ class focusData:
 		self.data.append(entry)
 		print("added ", entry)
 
+	def sortByRunID(self):
+		newData = sorted(self.data, key=lambda d: d['RunID'], reverse=True) 
+		self.data = newData
+
 	def getTargetsByRunID(self, runID): 
 		runIDtargets = []
 		for run in self.data:
 			if run['RunID'] == runID: runIDtargets.append(run['target'])
 		return runIDtargets
+
+	def getByRunID(self, runID):
+		for run in self.data:
+			if run['RunID'] == runID: return run
+		return None
 
 	def countFocusRuns(self, configuration):
 		print("Counting focus runs for: %s"%configuration)
@@ -110,18 +119,22 @@ class focusData:
 
 	def loadFromJSON(self, filename):
 		inputfile = open(filename, "rt")
+		self.filename = filename
 		self.data = json.load(inputfile)
 		inputfile.close()
 
 	def loadFromCSV(self, filename):
+		self.filename = filename
 		inputFile = open(filename, "rt")
 		for line in inputFile:
 			print(line)
 
-	def summary(self):
-		summary =  "%d focus runs."%len(self.data)
-		summary+="\n First 3 elements\n"
-		for index in range(3):
-			summary+= str(self.data[index]) + "\n"
+	def summary(self, sample=False):
+		summary =  "%d focus runs in %s."%(len(self.data), self.filename)
+		
+		if sample:
+			summary+="\n First 3 elements\n"
+			for index in range(3):
+				summary+= str(self.data[index]) + "\n"
 		return summary
 		
