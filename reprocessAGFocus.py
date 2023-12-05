@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
-import argparse, sys, json, datetime, os, re, shutil, subprocess
+import argparse, sys, json, datetime, os, re, shutil, subprocess, time
 import matplotlib.pyplot
 import numpy
 import focusData
+
+def getFilelist(folder, pattern):
+	import glob
+	fileCollection = []
+	listing = glob.glob(os.path.join(folder, pattern))
+	for f in listing:
+		fdict = { "filename": f, "timestamp": os.path.getmtime(f) }
+		fileCollection.append(fdict)
+
+	fileCollection.sort(key=lambda item: item['timestamp'])
+	return fileCollection
 
 def runcommand(commandstring, checkonly = False):
 	print("Running the command: %s"%commandstring)
@@ -59,6 +70,7 @@ if __name__ == "__main__":
 	parser.add_argument('--check', action="store_true", help="Just check the commands, don't actually execute the focus runs.")
 	parser.add_argument('--planeonly', action="store_true", help="Skips the autofocus script, just try plane fitting.")
 	parser.add_argument('run', type=str, default="none", help="Reprocess the focus run specified in this parameter and then stop.")
+	parser.add_argument('--focusoffsets', default="/data/wcomm/mbc/wcomm-150-152/", type=str, help='A folder contain focus offset data.')
 	args = parser.parse_args()
 	workingPath = os.getcwd()
 	dataFolder = "/obsdata/whta/"
@@ -115,6 +127,9 @@ if __name__ == "__main__":
 		# Check the headers in the first FITS file
 		source = os.path.join(dataFolder, run['night'], runFiles[0])
 		plate = checkFITSheaders(source, "PLATE")
+		# Also pick up telescope elevation and mountPA for later use
+		zenithdistance = checkFITSheaders(source, "ZDSTART")
+		mountPA = checkFITSheaders(source, "MNTPASTA")
 		if plate=="not found":
 			print("Could not determine PLATE A/B from the FITS headers of file %s. Skipping this focus run."%runFiles[0] )
 			continue
@@ -165,40 +180,114 @@ if __name__ == "__main__":
 		if not planeOnly:
 			runcommand(agFocusCommand, checkonly=args.check)
 
+		# Apply the focus offsets
+		focusOffsetFolder = args.focusoffsets
+		report.writeLine("looking for applicable focus offsets in folder %s"%focusOffsetFolder)
+		print("Looking for the offset files in %s"%focusOffsetFolder)
+		fileCollection = getFilelist(focusOffsetFolder, "intrinsic*.txt")
+		# Filter by plate
+		tempCollection = []
+		for file in fileCollection:
+			plateString = "plate"+ plate.replace("PLATE", "")
+			if plateString in file['filename']: tempCollection.append(file)
+		fileCollection = tempCollection
+		# Look for one matching the focus run date
+		print("%d offset files found in folder %s"%(len(fileCollection), focusOffsetFolder))
+		import re
+		for file in fileCollection:
+			fileDateString = re.findall("\d{8}", file['filename'])[0]
+			file['dateString'] = fileDateString
+		chosenOffsetFile = "none"
+		for file in fileCollection:
+			if int(file['dateString'])<int(run['night']): chosenOffsetFile = file
+			 
+		if chosenOffsetFile == "none": print("No offset file found for this focus run. Will not apply offsets")	 
+		else: print("offset file for this run is: ", chosenOffsetFile['filename'])
 		
+		# Write all of the output to the results table...
+		resultsReport = {
+			"RunId" : runID,
+			"night" : run['night'],
+			"plate" : plate,
+			"mountPA" : mountPA,
+			"elevation": 90-zenithdistance
+		}
+		
+		print()
 		# Now run the plane fitting code of Jure's 
 		# Look for the most recent plane output file in this folder
 		report.writeLine("autofocus completed. running the plane fit procedure.")
 		print("Looking for the most recent file in %s"%workingFolderPath)
-		import glob
-		fileCollection = []
-		listing = glob.glob("plane*.dat")
-		for f in listing:
-			fdict = { "filename": f, "timestamp": os.path.getmtime(f) }
-			fileCollection.append(fdict)
-
-		fileCollection.sort(key=lambda item: item['timestamp'])
+		fileCollection = getFilelist("", "plane*.dat")
 		planeFilename = fileCollection[-1]['filename']
-		print("Most recent: ", )
+		print("Most recent plane output file: %s"%planeFilename)
+		analysisID = str(os.path.splitext(planeFilename)[0]).replace("plane-", "")
+		resultsReport["AnalysisID"] = analysisID
+		# Load the offset file
+		offsetFile = open(chosenOffsetFile['filename'], 'rt')
+		offsets = {}
+		for line in offsetFile:
+			line = line.strip()
+			if line[0:2]=="ag": continue	# ignore the headings
+			if len(line)<1: continue
+			fields = line.split(',')
+			fibreId = int(fields[1].strip())
+			offset = float(fields[2].strip())
+			offsets[fibreId] = offset
+		print("will use the following offsets:", offsets)
+		offsetFile.close()
+		# Load the plane fit file
+		planefitFile = open(planeFilename, "rt")
+		tweakedFilename = planeFilename.replace("plane", "tweaked")
+		tweakedFile = open(tweakedFilename, "wt")
+
+		offsetsApplied = []
+		for line in planefitFile:
+			line = line.strip()
+			if len(line)<1: continue
+			fields = line.split()
+			fibreID = int(fields[3].strip())
+			x = float(fields[0].strip())
+			y = float(fields[1].strip())
+			focus = float(fields[2].strip())
+		
+			offsetInfo = { "fibreID" : fibreID, "original focus" : focus }
+
+			# Apply the offset as a subtraction
+			focus-=offsets[fibreID]
+			offsetInfo["new focus"] = focus
+			tweakedFile.write("%.3f %.3f %.3f %d\n"%(x, y, focus, fibreID))
+			offsetsApplied.append(offsetInfo)
+		tweakedFile.close()
+		planefitFile.close()
+		
+		resultsReport["offsets applied"] = offsetsApplied
+		
 		planeFitCommand = "planefit"
 		planeFitCommand+= " --noplot"
-		planeFitCommand+= " %s"%planeFilename
+		#planeFitCommand+= " %s"%planeFilename
+		planeFitCommand+= " %s"%tweakedFilename
 		jsonOutputFilename = os.path.splitext(planeFilename)[0] + ".json" 
 		planeFitCommand+= " --json=%s"%jsonOutputFilename
 
-		analysisID = str(os.path.splitext(planeFilename)[0]).replace("plane-", "")
 
 		report.writeLine("running %s"%planeFitCommand)
 		print("running %s"%planeFitCommand)
 		runcommand(planeFitCommand, checkonly=args.check)
 
-		# Write all of the output to the results table...
-		resultsReport = {
-			"RunId" : runID,
-			"night" : run['night'],
-			"analysisID" : analysisID,
-			"plate" : plate
-		}
+		# Load up the results of the planefit to include in the report
+		readJSON = open(jsonOutputFilename, "rt")
+		planeFitResult = json.load(readJSON)
+		readJSON.close()
 		
+		resultsReport['plane fit'] = planeFitResult
 		print(json.dumps(resultsReport, indent=4))
+
+		# Revert back to original folder
+		os.chdir(workingPath)
+		JSONreportFilename = "result_" + analysisID + ".json"
+		JSONreporter = open(JSONreportFilename, "wt")
+		json.dump(resultsReport, JSONreporter, indent=4)
+		JSONreporter.write("\n")
+		JSONreporter.close()		
 		
