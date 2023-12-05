@@ -245,6 +245,7 @@ if __name__ == "__main__":
 		for line in planefitFile:
 			line = line.strip()
 			if len(line)<1: continue
+			if line[0]=='#': continue
 			fields = line.split()
 			fibreID = int(fields[3].strip())
 			x = float(fields[0].strip())
