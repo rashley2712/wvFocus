@@ -69,10 +69,13 @@ if __name__ == "__main__":
 	parser.add_argument('--limit', default=-1, type=int, help="Limit to the most recent 'n' focus runs. Default will reprocess all runs found in the .json input file.")
 	parser.add_argument('--check', action="store_true", help="Just check the commands, don't actually execute the focus runs.")
 	parser.add_argument('--planeonly', action="store_true", help="Skips the autofocus script, just try plane fitting.")
+	parser.add_argument('--adjustconfig', action="store_true", help="Use the FIBXPchanges.dat file to adjust the fibre positions.")
 	parser.add_argument('run', type=str, default="none", help="Reprocess the focus run specified in this parameter and then stop.")
 	parser.add_argument('--focusoffsets', default="/data/wcomm/mbc/wcomm-150-152/", type=str, help='A folder contain focus offset data.')
+
 	args = parser.parse_args()
 	workingPath = os.getcwd()
+	codePath = os.path.split(os.path.realpath(__file__))[0]
 	dataFolder = "/obsdata/whta/"
 	planeOnly = args.planeonly
 
@@ -83,10 +86,6 @@ if __name__ == "__main__":
 
 	report = reportLog("report.log")
 	
-	
-	runLimit = args.limit
-	if runLimit == -1: runLimit = len(focusRuns.data)
-
 	if args.run != "none":
 		print("Focus run: ", args.run)
 		runsToProcess = [ args.run ]
@@ -150,28 +149,26 @@ if __name__ == "__main__":
 			print("Copying %s to %s"%(source, destination))
 			shutil.copyfile(source, destination)
 
-		"""# Check the headers in the first FITS file
-		plate = checkFITSheaders(os.path.join(workingFolderPath, runFiles[0]), "PLATE")
-		if plate=="not found":
-			print("Could not determine PLATE A/B from the FITS headers of file %s. Skipping this focus run."%runFiles[0] )
-			continue
-		elif plate=="LIFU":
-			print("This is a LIFU focus run... skipping...")
-			continue
-		else:
-			print("Found plate %s"%plate)
-			# strip the underscore from the plate name
-			plate = plate.replace("_", "")
-		"""
-		# Change folder to the autofocus output folder
+			# Change folder to the autofocus output folder
 		os.chdir(workingFolderPath)
 		report.writeLine("changed folder to %s"%workingFolderPath)
+	
+		if args.adjustconfig:
+			# Lookup and modify the xy positions of the fibres
+			adjustConfigCommand = os.path.join(codePath, "adjustConfig.py")
+			adjustConfigCommand+= " " + runID
+			adjustConfigCommand+= " " + plate
+			print("adjusting config with: %s"%adjustConfigCommand)
+			runcommand(adjustConfigCommand, checkonly=args.check)
+			#sys.exit()
+		
 		agFocusCommand = ""
 		agFocusCommand+= "autofocus_multi"
 		agFocusCommand+= " " + str(focusFirst) + " " + str(focusLast)
 		agFocusCommand+= " --plate=%s"%plate
 		agFocusCommand+= " --htmlDir . --planeDir . --simulation --noplane"
-		agFocusCommand+= ""
+		if args.adjustconfig:
+			agFocusCommand+= " --conf_file=adjusted.config"
 		for aperture in targetList:
 			agFocusCommand+=" -g %s"%aperture
 		agFocusCommand+= " --no_curses"
