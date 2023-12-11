@@ -166,7 +166,7 @@ if __name__ == "__main__":
 		agFocusCommand+= "autofocus_multi"
 		agFocusCommand+= " " + str(focusFirst) + " " + str(focusLast)
 		agFocusCommand+= " --plate=%s"%plate
-		agFocusCommand+= " --htmlDir . --planeDir . --simulation --noplane"
+		agFocusCommand+= " --htmlDir . --planeDir . --simulation --noplane --method circular"
 		if args.adjustconfig:
 			agFocusCommand+= " --conf_file=adjusted.config"
 		for aperture in targetList:
