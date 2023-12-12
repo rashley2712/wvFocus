@@ -32,6 +32,7 @@ class reportLog:
 		self.filename = filename
 		self.entries = {}
 		self.fileHandle = open(self.filename, "wt")
+		self.writeLine("Report start.")
 
 	def dumpAll(self):
 		outputfile = open(self.filename, "wt")
@@ -40,8 +41,16 @@ class reportLog:
 
 	def writeLine(self, activity):
 		timeStamp = str(datetime.datetime.now())
-		self.fileHandle.write("%s, %s\n"%(timeStamp, activity))
+		self.fileHandle.write("%s: %s\n"%(timeStamp, activity))
 		self.fileHandle.flush()
+
+	def writeSpace(self):
+		self.fileHandle.write("\n")
+		self.fileHandle.flush()
+
+	def end(self):
+		self.writeLine("Report end.")
+		self.fileHandle.close()
 		
 
 def checkFITSheaders(filename, header):
@@ -69,9 +78,11 @@ if __name__ == "__main__":
 	parser.add_argument('--limit', default=-1, type=int, help="Limit to the most recent 'n' focus runs. Default will reprocess all runs found in the .json input file.")
 	parser.add_argument('--check', action="store_true", help="Just check the commands, don't actually execute the focus runs.")
 	parser.add_argument('--planeonly', action="store_true", help="Skips the autofocus script, just try plane fitting.")
-	parser.add_argument('--adjustconfig', action="store_true", help="Use the FIBXPchanges.dat file to adjust the fibre positions.")
+	parser.add_argument('--ignorefibpx', action="store_true", help="Do not use the FIBXPchanges.dat file to adjust the fibre positions.")
 	parser.add_argument('run', type=str, default="none", help="Reprocess the focus run specified in this parameter and then stop.")
 	parser.add_argument('--focusoffsets', default="/data/wcomm/mbc/wcomm-150-152/", type=str, help='A folder contain focus offset data.')
+	parser.add_argument('--list', action="store_true", help="Specify this option if the 'run' parameter is actually a file containing a list of runs to process.")
+	
 
 	args = parser.parse_args()
 	workingPath = os.getcwd()
@@ -86,9 +97,23 @@ if __name__ == "__main__":
 
 	report = reportLog("report.log")
 	
-	if args.run != "none":
+	if not args.list:
 		print("Focus run: ", args.run)
 		runsToProcess = [ args.run ]
+	else:
+		print("You gave me a list of focus runs to process.")
+		listFile = open(args.run, "rt")
+		runsToProcess = []
+		for line in listFile:
+			line = line.strip()
+			if len(line)<2: continue
+			if line[0]=="#": continue
+			runsToProcess.append(line)
+		print("Will process the following focus runs")
+		print(runsToProcess)
+		print("Pausing for 5 seconds, use Ctrl-C to stop.")
+		time.sleep(5)
+
 
 	index = 0
 	runIDlist = []
@@ -96,6 +121,7 @@ if __name__ == "__main__":
 		run = focusRuns.getByRunID(runID)
 		index+=1
 		print("run:", run)
+		report.writeLine("Started reprocessing of run: %s"%run['RunID'])
 		camera = run['Camera']
 		if camera != "AGWEAVE": 
 			print("AGWEAVE not detected as the camera. Skipping")
@@ -150,10 +176,11 @@ if __name__ == "__main__":
 			shutil.copyfile(source, destination)
 
 			# Change folder to the autofocus output folder
+		report.writeLine("Copied r*.fits files from %s to %s"%(os.path.join(dataFolder, run['night']), workingFolderPath))
 		os.chdir(workingFolderPath)
 		report.writeLine("changed folder to %s"%workingFolderPath)
 	
-		if args.adjustconfig:
+		if not args.ignorefibpx:
 			# Lookup and modify the xy positions of the fibres
 			adjustConfigCommand = os.path.join(codePath, "adjustConfig.py")
 			adjustConfigCommand+= " " + runID
@@ -161,22 +188,25 @@ if __name__ == "__main__":
 			print("adjusting config with: %s"%adjustConfigCommand)
 			runcommand(adjustConfigCommand, checkonly=args.check)
 			#sys.exit()
-		
+		report.writeLine("Adjusted the config file with most recent fibre positions for this run date-time.")
+
 		agFocusCommand = ""
 		agFocusCommand+= "autofocus_multi"
 		agFocusCommand+= " " + str(focusFirst) + " " + str(focusLast)
 		agFocusCommand+= " --plate=%s"%plate
 		agFocusCommand+= " --htmlDir . --planeDir . --simulation --noplane --method circular"
-		if args.adjustconfig:
+		if not args.ignorefibpx:
 			agFocusCommand+= " --conf_file=adjusted.config"
 		for aperture in targetList:
 			agFocusCommand+=" -g %s"%aperture
 		agFocusCommand+= " --no_curses"
 		
-		report.writeLine("running  %s"%agFocusCommand)
+		report.writeLine("Running  %s"%agFocusCommand)
 		if not planeOnly:
 			runcommand(agFocusCommand, checkonly=args.check)
-
+		
+		report.writeLine("autofocus completed. running the plane fit procedure.")
+	
 		# Apply the focus offsets
 		focusOffsetFolder = args.focusoffsets
 		report.writeLine("looking for applicable focus offsets in folder %s"%focusOffsetFolder)
@@ -213,7 +243,6 @@ if __name__ == "__main__":
 		print()
 		# Now run the plane fitting code of Jure's 
 		# Look for the most recent plane output file in this folder
-		report.writeLine("autofocus completed. running the plane fit procedure.")
 		print("Looking for the most recent file in %s"%workingFolderPath)
 		fileCollection = getFilelist("", "plane*.dat")
 		planeFilename = fileCollection[-1]['filename']
@@ -283,9 +312,12 @@ if __name__ == "__main__":
 
 		# Revert back to original folder
 		os.chdir(workingPath)
+		report.writeLine("Changed folder back to %s"%workingPath)
 		JSONreportFilename = "result_" + analysisID + ".json"
 		JSONreporter = open(JSONreportFilename, "wt")
 		json.dump(resultsReport, JSONreporter, indent=4)
 		JSONreporter.write("\n")
 		JSONreporter.close()		
-		
+		report.writeLine("Written json file with results to: %s"%JSONreportFilename)
+		report.writeSpace()
+	report.end()
