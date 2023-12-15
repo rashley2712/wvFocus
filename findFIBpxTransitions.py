@@ -12,7 +12,7 @@ and the values of the keywords.
 
 import sys
 import os
-import argparse
+import argparse, datetime
 import glob
 from astropy.io import fits
 import numpy as np
@@ -49,13 +49,14 @@ def parseArgs():
     """
     parser = argparse.ArgumentParser(description='Scan the given directory for diretctory names in form YYYYMMDD and for directory get a list of FITS files with names like AG*.fit For each files read the header and check for presence of keywords with names FIBPX<n>X and FIBPX<n>Y, where <n> ranges between 1 and 8. If the keywords are present, compare to previously stored values, and if they different from the currently sdtored, print name of the file, date and time, and the values of the keywords.')
     parser.add_argument('dirName', type=str, help='Directory name')
-    parser.add_argument('-o', '--output', type=str, help='Output file name', required=False)
+    parser.add_argument('-o', '--output', default="FIBPXchanges.dat", type=str, help='Output file name', required=False)
+    parser.add_argument('--full', action="store_true", help='Force a full rebuild of the output file, otherwise do an incremental build.', required=False)
 
     args = parser.parse_args()
     return args
 
 
-def getDirNames(dirName):
+def getDirNames(dirName, fromDate = datetime.datetime.strptime("2000-01-01", "%Y-%m-%d")):
     """
     Scan the given directory for subdirectories with names in form YYYYMMDD
     and return a list of such names.
@@ -69,7 +70,16 @@ def getDirNames(dirName):
             if len(name) == 8 and name.isdigit():
                 dirNames.append(name)
 
-    return dirNames
+    # filter out dirnames older than fromDate
+    newDirnames = []
+    for d in dirNames:
+        try:
+            if datetime.datetime.strptime(d, "%Y%m%d") > fromDate:
+                newDirnames.append(d)
+        except ValueError:
+            continue
+
+    return newDirnames
 
 def compareVals(currentVals, fibVals):
     """
@@ -92,12 +102,45 @@ def main():
     args = parseArgs()
     dirName = args.dirName
     outputFileName = args.output
+    oldestDate = "2000-01-01"
+
+    fullSearch = False
+    mostRecentDatePlate = [ datetime.datetime.strptime("2000-01-01", "%Y-%m-%d"), datetime.datetime.strptime("2000-01-01", "%Y-%m-%d") ]
+    if not args.full:   # Try to re-use an existing results file and only scan newer folders.
+        try: 
+            existingFile = open(outputFileName, "rt")
+            for line in existingFile:
+                fields = line.strip().split()
+                lineDate = datetime.datetime.strptime(fields[1], "%Y-%m-%d")
+                if fields[3]=="PLATE_A" and lineDate>mostRecentDatePlate[0]:
+                    mostRecentDatePlate[0]=lineDate
+                if fields[3]=="PLATE_B" and lineDate>mostRecentDatePlate[1]:
+                    mostRecentDatePlate[1]=lineDate
+            existingFile.close()
+            if mostRecentDatePlate[0]<mostRecentDatePlate[1]: oldest = mostRecentDatePlate[0]
+            else: oldest = mostRecentDatePlate[1]
+            oldestDate = oldest.strftime("%Y-%m-%d")
+            print("oldest entry is %s. Will scan from there..."%oldestDate)
+            fullSearch = False
+        except: 
+            print("Could not find existing file %s with fibre positions. Will perform a full brute force search. Starting in 7 seconds. Ctrl-C to interrupt.")
+            time.sleep(7)
+            fullSearch = True
+    else:
+        fullSearch = True              
+
 
     currentVals = {'PLATE_A' : {}, 'PLATE_B' : {}}
-    dailyNames = getDirNames(dirName)
+    dailyNames = getDirNames(dirName, datetime.datetime.strptime(oldestDate,"%Y-%m-%d"))
+
+    
     # Output file handle
     if outputFileName:
-        outputFile = open(outputFileName, "w")
+        if fullSearch: 
+            outputFile = open(outputFileName, "wt")
+        else:
+            print("Appending to file %s"%outputFileName) 
+            outputFile = open(outputFileName, "at")
     else:
         # Write to standard output
         outputFile = sys.stdout

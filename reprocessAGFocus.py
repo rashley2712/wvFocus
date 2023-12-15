@@ -190,10 +190,13 @@ if __name__ == "__main__":
 			#sys.exit()
 		report.writeLine("Adjusted the config file with most recent fibre positions for this run date-time.")
 
+		expTime = 0.1
 		agFocusCommand = ""
 		agFocusCommand+= "autofocus_multi"
 		agFocusCommand+= " " + str(focusFirst) + " " + str(focusLast)
 		agFocusCommand+= " --plate=%s"%plate
+		agFocusCommand+= " -n %d"%len(runFiles)
+		agFocusCommand+= " --expTime %f"%expTime
 		agFocusCommand+= " --htmlDir . --planeDir . --simulation --noplane --method circular"
 		if not args.ignorefibpx:
 			agFocusCommand+= " --conf_file=adjusted.config"
